@@ -15,8 +15,9 @@
     <string name="button_camera_ease">Ease</string>
     <string name="button_camera_animate">Animate</string>
     <string name="button_open_dialog">Open dialog</string>
-    <string name="button_download_region">Download region</string>
-    <string name="button_list_regions">List regions</string>
+    <string name="button_download_region">Download</string>
+    <string name="button_list_regions">List</string>
+    <string name="button_cancel_download">Cancel</string>
     <string name="action_remove_polylines">Remove polylines</string>
     <string name="action_visibility_polygon">Change visibility</string>
     <string name="action_alpha_polygon">Change alpha</string>

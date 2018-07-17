@@ -54,6 +54,7 @@ public class OfflineActivity extends AppCompatActivity
   private ProgressBar progressBar;
   private Button downloadRegion;
   private Button listRegions;
+  private Button cancelDownloadRegion;
 
   private boolean isEndNotified;
 
@@ -101,6 +102,9 @@ public class OfflineActivity extends AppCompatActivity
 
     listRegions = (Button) findViewById(R.id.button_list_regions);
     listRegions.setOnClickListener(view -> handleListRegions());
+
+    cancelDownloadRegion = (Button) findViewById(R.id.cancel_download_region);
+    cancelDownloadRegion.setOnClickListener(view -> handleCancelDownloadRegion());
 
     // Set up the OfflineManager
     offlineManager = OfflineManager.getInstance(this);
@@ -151,6 +155,7 @@ public class OfflineActivity extends AppCompatActivity
   /*
    * Buttons logic
    */
+
   private void handleDownloadRegion() {
     Timber.d("handleDownloadRegion");
 
@@ -158,7 +163,6 @@ public class OfflineActivity extends AppCompatActivity
     OfflineDownloadRegionDialog offlineDownloadRegionDialog = new OfflineDownloadRegionDialog();
     offlineDownloadRegionDialog.show(getSupportFragmentManager(), "download");
   }
-
   private void handleListRegions() {
     Timber.d("handleListRegions");
 
@@ -195,6 +199,27 @@ public class OfflineActivity extends AppCompatActivity
     });
   }
 
+  private void handleCancelDownloadRegion() {
+    Timber.d("Mapbox: Fetching all regions.");
+    offlineManager.listOfflineRegions(new OfflineManager.ListOfflineRegionsCallback() {
+      @Override
+      public void onList(OfflineRegion[] offlineRegions) {
+          Timber.d("Mapbox: Fetched all regions.");
+          for (OfflineRegion offlineRegion : offlineRegions) {
+                if(offlineRegion.getID() == OfflineActivity.this.offlineRegion.getID()) {
+                    Timber.d("Mapbox: Cancelling current download region.");
+                    offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
+                }
+          }
+      }
+
+      @Override
+      public void onError(String error) {
+
+      }
+    });
+  }
+
   /*
    * Dialogs
    */
@@ -211,8 +236,10 @@ public class OfflineActivity extends AppCompatActivity
 
     // Definition
     LatLngBounds bounds = mapboxMap.getProjection().getVisibleRegion().latLngBounds;
-    double minZoom = mapboxMap.getCameraPosition().zoom;
-    double maxZoom = mapboxMap.getMaxZoomLevel();
+    double minZoom = 0.0;
+    double maxZoom = 16.0;
+    offlineManager.setOfflineMapboxTileCountLimit(200000);
+
     float pixelRatio = this.getResources().getDisplayMetrics().density;
     OfflineTilePyramidRegionDefinition definition = new OfflineTilePyramidRegionDefinition(
       STYLE_URL, bounds, minZoom, maxZoom, pixelRatio);

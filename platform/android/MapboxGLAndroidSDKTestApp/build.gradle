@@ -54,7 +54,9 @@ android {
 
 dependencies {
     implementation dependenciesList.kotlinLib
-    api(project(':MapboxGLAndroidSDK'))
+    implementation('com.mapbox.mapboxsdk:mapbox-android-sdk:6.3.0-SNAPSHOT@aar') {
+        transitive = true
+    }
     implementation dependenciesList.mapboxJavaServices
 
     implementation dependenciesList.mapboxJavaTurf
