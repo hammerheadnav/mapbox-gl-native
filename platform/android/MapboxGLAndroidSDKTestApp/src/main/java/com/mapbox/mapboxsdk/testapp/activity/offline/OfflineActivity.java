@@ -23,8 +23,11 @@ import com.mapbox.mapboxsdk.testapp.model.other.OfflineListRegionsDialog;
 import com.mapbox.mapboxsdk.testapp.utils.OfflineUtils;
 import okhttp3.Dispatcher;
 import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.Response;
 import timber.log.Timber;
 
+import java.net.SocketTimeoutException;
 import java.util.ArrayList;
 import java.util.concurrent.TimeUnit;
 
@@ -287,6 +290,27 @@ public class OfflineActivity extends AppCompatActivity
             .readTimeout(1, TimeUnit.MINUTES)
             .connectTimeout(1, TimeUnit.MINUTES)
             .writeTimeout(1, TimeUnit.MINUTES)
+            .addInterceptor(chain -> {
+              Request request = chain.request();
+              Response response = null;
+              boolean responseOK = false;
+              int tryCount = 0;
+
+              while (!responseOK && tryCount < 3) {
+                try {
+                  response = chain.proceed(request);
+                  responseOK = response.isSuccessful();
+                } catch (SocketTimeoutException e) {
+                  e.printStackTrace();
+                  Timber.d("Offline : Intercepted SocketTimeoutException: Retrying :: " + tryCount + " Url : " + chain.request().url());
+                } finally {
+                  tryCount++;
+                }
+              }
+
+              // otherwise just pass the original response on
+              return response;
+            })
             .dispatcher(dispatcher)
             .build();
     HttpRequestUtil.setOkHttpClient(okHttpClient);
