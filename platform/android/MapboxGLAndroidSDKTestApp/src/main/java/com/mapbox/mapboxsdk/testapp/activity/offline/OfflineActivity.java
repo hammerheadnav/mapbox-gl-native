@@ -7,28 +7,26 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.ProgressBar;
 import android.widget.Toast;
-
 import com.mapbox.mapboxsdk.Mapbox;
 import com.mapbox.mapboxsdk.camera.CameraPosition;
 import com.mapbox.mapboxsdk.camera.CameraUpdateFactory;
 import com.mapbox.mapboxsdk.constants.Style;
 import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.geometry.LatLngBounds;
+import com.mapbox.mapboxsdk.http.HttpRequestUtil;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-import com.mapbox.mapboxsdk.offline.OfflineManager;
-import com.mapbox.mapboxsdk.offline.OfflineRegion;
-import com.mapbox.mapboxsdk.offline.OfflineRegionError;
-import com.mapbox.mapboxsdk.offline.OfflineRegionStatus;
-import com.mapbox.mapboxsdk.offline.OfflineTilePyramidRegionDefinition;
+import com.mapbox.mapboxsdk.offline.*;
 import com.mapbox.mapboxsdk.testapp.R;
 import com.mapbox.mapboxsdk.testapp.model.other.OfflineDownloadRegionDialog;
 import com.mapbox.mapboxsdk.testapp.model.other.OfflineListRegionsDialog;
 import com.mapbox.mapboxsdk.testapp.utils.OfflineUtils;
+import okhttp3.Dispatcher;
+import okhttp3.OkHttpClient;
+import timber.log.Timber;
 
 import java.util.ArrayList;
-
-import timber.log.Timber;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Test activity showcasing the Offline API.
@@ -37,7 +35,7 @@ import timber.log.Timber;
  * </p>
  */
 public class OfflineActivity extends AppCompatActivity
-  implements OfflineDownloadRegionDialog.DownloadRegionDialogListener {
+        implements OfflineDownloadRegionDialog.DownloadRegionDialogListener {
 
   // JSON encoding/decoding
   public static final String JSON_CHARSET = "UTF-8";
@@ -85,12 +83,12 @@ public class OfflineActivity extends AppCompatActivity
 
       // Set initial position to UNHQ in NYC
       mapboxMap.moveCamera(CameraUpdateFactory.newCameraPosition(
-        new CameraPosition.Builder()
-          .target(new LatLng(40.749851, -73.967966))
-          .zoom(14)
-          .bearing(0)
-          .tilt(0)
-          .build()));
+              new CameraPosition.Builder()
+                      .target(new LatLng(40.749851, -73.967966))
+                      .zoom(14)
+                      .bearing(0)
+                      .tilt(0)
+                      .build()));
     });
 
     // The progress bar
@@ -163,6 +161,7 @@ public class OfflineActivity extends AppCompatActivity
     OfflineDownloadRegionDialog offlineDownloadRegionDialog = new OfflineDownloadRegionDialog();
     offlineDownloadRegionDialog.show(getSupportFragmentManager(), "download");
   }
+
   private void handleListRegions() {
     Timber.d("handleListRegions");
 
@@ -194,7 +193,7 @@ public class OfflineActivity extends AppCompatActivity
 
       @Override
       public void onError(String error) {
-        Timber.e("Error: %s" , error);
+        Timber.e("Error: %s", error);
       }
     });
   }
@@ -204,13 +203,27 @@ public class OfflineActivity extends AppCompatActivity
     offlineManager.listOfflineRegions(new OfflineManager.ListOfflineRegionsCallback() {
       @Override
       public void onList(OfflineRegion[] offlineRegions) {
-          Timber.d("Mapbox: Fetched all regions.");
-          for (OfflineRegion offlineRegion : offlineRegions) {
-                if(offlineRegion.getID() == OfflineActivity.this.offlineRegion.getID()) {
-                    Timber.d("Mapbox: Cancelling current download region.");
-                    offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
+        Timber.d("Mapbox: Fetched all regions.");
+        for (OfflineRegion offlineRegion : offlineRegions) {
+          if (offlineRegion.getID() == OfflineActivity.this.offlineRegion.getID()) {
+            offlineRegion.getStatus(new OfflineRegion.OfflineRegionStatusCallback() {
+              @Override
+              public void onStatus(OfflineRegionStatus status) {
+                Timber.d("Mapbox: Got status.");
+                if (status.getDownloadState() == OfflineRegion.STATE_ACTIVE) {
+                  Timber.d("Mapbox: Cancelling current download region.");
+                  OfflineActivity.this.offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
                 }
+              }
+
+              @Override
+              public void onError(String error) {
+
+              }
+            });
+
           }
+        }
       }
 
       @Override
@@ -237,12 +250,12 @@ public class OfflineActivity extends AppCompatActivity
     // Definition
     LatLngBounds bounds = mapboxMap.getProjection().getVisibleRegion().latLngBounds;
     double minZoom = 0.0;
-    double maxZoom = 16.0;
+    double maxZoom = 14.0;
     offlineManager.setOfflineMapboxTileCountLimit(200000);
 
     float pixelRatio = this.getResources().getDisplayMetrics().density;
     OfflineTilePyramidRegionDefinition definition = new OfflineTilePyramidRegionDefinition(
-      STYLE_URL, bounds, minZoom, maxZoom, pixelRatio);
+            STYLE_URL, bounds, minZoom, maxZoom, pixelRatio);
 
     // Sample way of encoding metadata from a JSONObject
     byte[] metadata = OfflineUtils.convertRegionName(regionName);
@@ -251,9 +264,9 @@ public class OfflineActivity extends AppCompatActivity
     offlineManager.createOfflineRegion(definition, metadata, new OfflineManager.CreateOfflineRegionCallback() {
       @Override
       public void onCreate(OfflineRegion offlineRegion) {
-        Timber.d("Offline region created: %s" , regionName);
+        Timber.d("Offline region created: %s", regionName);
         OfflineActivity.this.offlineRegion = offlineRegion;
-        launchDownload();
+        launchDownload(offlineRegion);
       }
 
       @Override
@@ -263,21 +276,34 @@ public class OfflineActivity extends AppCompatActivity
     });
   }
 
-  private void launchDownload() {
+  private void launchDownload(OfflineRegion offlineRegion) {
     // Set an observer
+    HttpRequestUtil.setPrintRequestUrlOnFailure(true);
+    HttpRequestUtil.setLogEnabled(true);
+    Dispatcher dispatcher = new Dispatcher();
+    dispatcher.setMaxRequestsPerHost(20);
+    OkHttpClient okHttpClient = new OkHttpClient
+            .Builder()
+            .readTimeout(1, TimeUnit.MINUTES)
+            .connectTimeout(1, TimeUnit.MINUTES)
+            .writeTimeout(1, TimeUnit.MINUTES)
+            .dispatcher(dispatcher)
+            .build();
+    HttpRequestUtil.setOkHttpClient(okHttpClient);
     offlineRegion.setObserver(new OfflineRegion.OfflineRegionObserver() {
       @Override
       public void onStatusChanged(OfflineRegionStatus status) {
         // Compute a percentage
         double percentage = status.getRequiredResourceCount() >= 0
-          ? (100.0 * status.getCompletedResourceCount() / status.getRequiredResourceCount()) :
-          0.0;
+                ? (100.0 * status.getCompletedResourceCount() / status.getRequiredResourceCount()) :
+                0.0;
 
+        Timber.d("Status " + status.getDownloadState());
         if (status.isComplete()) {
           // Download complete
           endProgress("Region downloaded successfully.");
-          offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
-          offlineRegion.setObserver(null);
+          OfflineActivity.this.offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
+          OfflineActivity.this.offlineRegion.setObserver(null);
           return;
         } else if (status.isRequiredResourceCountPrecise()) {
           // Switch to determinate state
@@ -286,25 +312,26 @@ public class OfflineActivity extends AppCompatActivity
 
         // Debug
         Timber.d("%s/%s resources; %s bytes downloaded.",
-          String.valueOf(status.getCompletedResourceCount()),
-          String.valueOf(status.getRequiredResourceCount()),
-          String.valueOf(status.getCompletedResourceSize()));
+                String.valueOf(status.getCompletedResourceCount()),
+                String.valueOf(status.getRequiredResourceCount()),
+                String.valueOf(status.getCompletedResourceSize()));
       }
 
       @Override
       public void onError(OfflineRegionError error) {
         Timber.e("onError: %s, %s", error.getReason(), error.getMessage());
-        offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
+        OfflineActivity.this.offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
       }
 
       @Override
       public void mapboxTileCountLimitExceeded(long limit) {
         Timber.e("Mapbox tile count limit exceeded: %s", limit);
-        offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
+        OfflineActivity.this.offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
       }
     });
 
     // Change the region state
+    offlineRegion.setDeliverInactiveMessages(true);
     offlineRegion.setDownloadState(OfflineRegion.STATE_ACTIVE);
   }
 
