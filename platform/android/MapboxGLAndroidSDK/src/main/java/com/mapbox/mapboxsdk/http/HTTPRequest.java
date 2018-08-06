@@ -5,33 +5,50 @@ import android.content.Context;
 import android.content.pm.PackageInfo;
 import android.os.Build;
 import android.text.TextUtils;
-
 import com.mapbox.mapboxsdk.BuildConfig;
 import com.mapbox.mapboxsdk.Mapbox;
 import com.mapbox.mapboxsdk.constants.MapboxConstants;
-
-import java.io.IOException;
-import java.io.InterruptedIOException;
-import java.net.NoRouteToHostException;
-import java.net.ProtocolException;
-import java.net.SocketException;
-import java.net.UnknownHostException;
-import java.util.concurrent.locks.ReentrantLock;
-
-import javax.net.ssl.SSLException;
-
-import okhttp3.Call;
-import okhttp3.Callback;
-import okhttp3.HttpUrl;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
+import okhttp3.*;
 import okhttp3.internal.Util;
 import timber.log.Timber;
 
+import javax.net.ssl.SSLException;
+import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.net.*;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+
 class HTTPRequest implements Callback {
 
-  private static OkHttpClient mClient = new OkHttpClient();
+  private static OkHttpClient mClient = new OkHttpClient()
+          .newBuilder()
+          .readTimeout(1, TimeUnit.MINUTES)
+          .connectTimeout(1, TimeUnit.MINUTES)
+          .writeTimeout(1, TimeUnit.MINUTES)
+          .dispatcher(newDispatcher())
+          .addInterceptor(chain -> {
+            Request request = chain.request();
+            Response response = null;
+            boolean responseOK = false;
+            int tryCount = 0;
+
+            while (!responseOK && tryCount < 3) {
+              try {
+                response = chain.proceed(request);
+                responseOK = response.isSuccessful() || response.code() == HttpURLConnection.HTTP_NOT_MODIFIED;
+              } catch (SocketTimeoutException e) {
+                e.printStackTrace();
+                Timber.d("OfflineMap : Intercepted SocketTimeoutException: Retrying :: " + tryCount + " Url : " + chain.request().url());
+              } finally {
+                tryCount++;
+              }
+            }
+
+            // otherwise just pass the original response on
+            return response;
+          })
+          .build();
   private String USER_AGENT_STRING = null;
 
   private static final int CONNECTION_ERROR = 0;
@@ -64,7 +81,7 @@ class HTTPRequest implements Callback {
       HttpUrl httpUrl = HttpUrl.parse(resourceUrl);
       final String host = httpUrl.host().toLowerCase(MapboxConstants.MAPBOX_LOCALE);
       if (host.equals("mapbox.com") || host.endsWith(".mapbox.com") || host.equals("mapbox.cn")
-        || host.endsWith(".mapbox.cn")) {
+              || host.endsWith(".mapbox.cn")) {
         if (httpUrl.querySize() == 0) {
           resourceUrl = resourceUrl + "?";
         } else {
@@ -74,9 +91,9 @@ class HTTPRequest implements Callback {
       }
 
       Request.Builder builder = new Request.Builder()
-        .url(resourceUrl)
-        .tag(resourceUrl.toLowerCase(MapboxConstants.MAPBOX_LOCALE))
-        .addHeader("User-Agent", getUserAgent());
+              .url(resourceUrl)
+              .tag(resourceUrl.toLowerCase(MapboxConstants.MAPBOX_LOCALE))
+              .addHeader("User-Agent", getUserAgent());
       if (etag.length() > 0) {
         builder = builder.addHeader("If-None-Match", etag);
       } else if (modified.length() > 0) {
@@ -114,8 +131,8 @@ class HTTPRequest implements Callback {
       // We don't want to call this unsuccessful because a 304 isn't really an error
       String message = !TextUtils.isEmpty(response.message()) ? response.message() : "No additional information";
       Timber.d(String.format(
-        "[HTTP] Request with response code = %d: %s",
-        response.code(), message));
+              "[HTTP] Request with response code = %d: %s",
+              response.code(), message));
     }
 
     byte[] body;
@@ -132,15 +149,21 @@ class HTTPRequest implements Callback {
     mLock.lock();
     if (mNativePtr != 0) {
       nativeOnResponse(response.code(),
-        response.header("ETag"),
-        response.header("Last-Modified"),
-        response.header("Cache-Control"),
-        response.header("Expires"),
-        response.header("Retry-After"),
-        response.header("x-rate-limit-reset"),
-        body);
+              response.header("ETag"),
+              response.header("Last-Modified"),
+              response.header("Cache-Control"),
+              response.header("Expires"),
+              response.header("Retry-After"),
+              response.header("x-rate-limit-reset"),
+              body);
     }
     mLock.unlock();
+  }
+
+  private static Dispatcher newDispatcher() {
+    Dispatcher dispatcher = new Dispatcher();
+    dispatcher.setMaxRequestsPerHost(20);
+    return dispatcher;
   }
 
   @Override
@@ -151,7 +174,7 @@ class HTTPRequest implements Callback {
   private void onFailure(Exception e) {
     int type = PERMANENT_ERROR;
     if ((e instanceof NoRouteToHostException) || (e instanceof UnknownHostException) || (e instanceof SocketException)
-      || (e instanceof ProtocolException) || (e instanceof SSLException)) {
+            || (e instanceof ProtocolException) || (e instanceof SSLException)) {
       type = CONNECTION_ERROR;
     } else if ((e instanceof InterruptedIOException)) {
       type = TEMPORARY_ERROR;
@@ -161,14 +184,14 @@ class HTTPRequest implements Callback {
 
     if (type == TEMPORARY_ERROR) {
       Timber.d(String.format(MapboxConstants.MAPBOX_LOCALE,
-        "Request failed due to a temporary error: %s", errorMessage));
+              "Request failed due to a temporary error: %s", errorMessage));
     } else if (type == CONNECTION_ERROR) {
       Timber.i(String.format(MapboxConstants.MAPBOX_LOCALE,
-        "Request failed due to a connection error: %s", errorMessage));
+              "Request failed due to a connection error: %s", errorMessage));
     } else {
       // PERMANENT_ERROR
       Timber.w(String.format(MapboxConstants.MAPBOX_LOCALE,
-        "Request failed due to a permanent error: %s", errorMessage));
+              "Request failed due to a permanent error: %s", errorMessage));
     }
 
     mLock.lock();
@@ -181,12 +204,12 @@ class HTTPRequest implements Callback {
   private String getUserAgent() {
     if (USER_AGENT_STRING == null) {
       return USER_AGENT_STRING = Util.toHumanReadableAscii(
-        String.format("%s %s (%s) Android/%s (%s)",
-          getApplicationIdentifier(),
-          BuildConfig.MAPBOX_VERSION_STRING,
-          BuildConfig.GIT_REVISION_SHORT,
-          Build.VERSION.SDK_INT,
-          Build.CPU_ABI)
+              String.format("%s %s (%s) Android/%s (%s)",
+                      getApplicationIdentifier(),
+                      BuildConfig.MAPBOX_VERSION_STRING,
+                      BuildConfig.GIT_REVISION_SHORT,
+                      Build.VERSION.SDK_INT,
+                      Build.CPU_ABI)
       );
     } else {
       return USER_AGENT_STRING;
